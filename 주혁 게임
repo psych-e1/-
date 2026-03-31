@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>💎 돌 캐기 타이쿤 2D</title>
+<style>
+body { font-family: Arial; background:#e0f7ff; text-align:center; }
+h1 { margin-bottom:5px; }
+#game { display:flex; gap:15px; justify-content:center; margin-top:10px; }
+
+#grid { display:grid; grid-template-columns:repeat(8,60px); gap:5px; position:relative; background:#b3e5fc; padding:5px; border-radius:12px; }
+.cell { width:60px; height:60px; border-radius:12px; background:#d0ecff; cursor:pointer; position:relative; display:flex; justify-content:center; align-items:center; }
+.cell img { width:40px; height:40px; pointer-events:none; }
+
+.panel { width:320px; background:white; padding:10px; border-radius:15px; text-align:left; box-shadow:0 2px 5px rgba(0,0,0,0.2); }
+button { border:none; border-radius:6px; padding:3px 6px; cursor:pointer; font-weight:bold; }
+button:hover { background:#ffb347; }
+
+#inventory div { margin:4px 0; }
+.inv-buttons button { margin-left:4px; }
+
+.locked { color:gray; }
+
+.particle { position:absolute; width:8px; height:8px; border-radius:50%; pointer-events:none; }
+.bot { position:absolute; width:40px; height:40px; transition:0.2s linear; }
+
+/* 상점 아이템 직선 정렬 */
+.shop-item { display:flex; justify-content:space-between; align-items:center; margin:4px 0; }
+.shop-item button { background:#ffcc70; min-width:60px; }
+.shop-item button.disabled { background:#ccc; cursor:not-allowed; }
+</style>
+</head>
+<body>
+
+<h1>⛏️ 돌 캐기 타이쿤 2D</h1>
+<p>💰 돈: <span id="money">0</span></p>
+
+<div id="game">
+  <div id="grid"></div>
+
+  <div class="panel">
+    <h3>🎒 인벤토리</h3>
+    <div id="inventory"></div>
+    <button id="combineAll" class="disabled" disabled>전체 조합</button>
+    <button id="sellAll" class="disabled" disabled>전체 판매</button>
+  </div>
+
+  <div class="panel">
+    <h3>🔨 합성</h3>
+    <div id="combineList"></div>
+  </div>
+
+  <div class="panel" id="shopPanel">
+    <h3>🛒 상점</h3>
+    <div id="shop"></div>
+  </div>
+</div>
+
+<script>
+// =====================
+// 광물 데이터
+// =====================
+const names = ["돌","큰 돌","화강암","구리","철","금","크리스탈","사파이어","에메랄드","다이아몬드","기반암","전설의 돌","이름 생각안남","암튼 전나 쩌는 돌"];
+const prices = [1,3,8,20,50,130,300,750,2000,5200,12000,35000,120000,450000];
+let inventory = names.map((n,i)=>({name:n, price:prices[i], count:0, unlocked:i===0, autoSell:false, autoCombine:false, img:`${n}.png`}));
+let money = 0;
+
+// =====================
+// 상점 데이터
+// =====================
+let shop={pickaxe:0, spawn:0, rare:0, bot:0, botSpeed:0, unlockSellAll:false, unlockCombineAll:false, autoSell:false, autoCombine:false};
+const pickaxeCost=[10,30,50,80,120];
+const spawnCost=[30,50,90,150,250,500,800,1200,2500];
+const rareCost=[20,40,80,160,320,640];
+const botCost=[500,1000,2000,4000,6000];
+const botUpgradeCost=[2000,4000,8000,25000,70000];
+
+// =====================
+// GRID & CELL
+// =====================
+let grid=[];
+const GRID_SIZE=64;
+function createGrid(){
+  let el=document.getElementById("grid");
+  el.innerHTML="";
+  grid=[];
+  for(let i=0;i<GRID_SIZE;i++){
+    grid.push({mineral:null,hp:0});
+    let d=document.createElement("div");
+    d.className="cell";
+    d.onclick=()=>mine(i);
+    el.appendChild(d);
+  }
+}
+
+// =====================
+// 채굴
+// =====================
+function mine(i){
+  let c=grid[i];
+  if(c.hp<=0) return;
+  c.hp-=1+shop.pickaxe*0.5; // 곡괭이 레벨만큼 캐기 효율 증가
+  createParticles(i);
+  if(c.hp<=0){
+    let m=c.mineral;
+    if(m!==null){
+      inventory[m].count++;
+      if(inventory[m].autoSell && shop.autoSell) sell(m);
+      if(inventory[m].autoCombine && shop.autoCombine) combine(m);
+    }
+    grid[i]={mineral:null,hp:0}; // 캐진 돌 제거
+    renderCell(i);
+    updateUI();
+  } else renderCell(i);
+}
+
+// =====================
+// 파티클
+// =====================
+function createParticles(i){
+  let cell=document.getElementById("grid").children[i];
+  for(let j=0;j<5;j++){
+    let p=document.createElement("div");
+    p.className="particle";
+    p.style.left=Math.random()*40+10+"px";
+    p.style.top=Math.random()*40+10+"px";
+    p.style.background=`hsl(${Math.random()*360},80%,60%)`;
+    cell.appendChild(p);
+    setTimeout(()=>p.remove(),300);
+  }
+}
+
+// =====================
+// 스폰
+// =====================
+function respawn(i){
+  let chance=0.1+shop.rare*0.05;
+  let type=Math.random()<chance?Math.floor(Math.random()*6):0;
+  grid[i]={mineral:type,hp:3};
+  renderCell(i);
+}
+
+// 서서히 스폰
+setInterval(()=>{
+  let empty = grid.map((c,i)=>c.hp<=0?i:null).filter(i=>i!==null);
+  if(empty.length===0) return;
+  respawn(empty[Math.floor(Math.random()*empty.length)]);
+}, 2000 - shop.spawn*150);
+
+// =====================
+// 셀 렌더
+// =====================
+function renderCell(i){
+  let c=grid[i];
+  let cell=document.getElementById("grid").children[i];
+  cell.innerHTML="";
+  if(c.hp>0){
+    let img=document.createElement("img");
+    img.src=inventory[c.mineral].img;
+    cell.appendChild(img);
+  }
+}
+
+// =====================
+// UI 업데이트
+// =====================
+function updateUI(){
+  document.getElementById("money").innerText=money;
+  let inv=document.getElementById("inventory");
+  inv.innerHTML="";
+  inventory.forEach((m,i)=>{
+    let d=document.createElement("div");
+    if(!m.unlocked){ d.className="locked"; d.innerText="???"; }
+    else {
+      d.innerHTML=`${m.name}: ${m.count}`;
+      let btnSell=document.createElement("button");
+      btnSell.innerText="판매";
+      btnSell.onclick=()=>sell(i);
+      let btnAutoSell=document.createElement("button");
+      btnAutoSell.innerText="자동판매";
+      btnAutoSell.style.background = !shop.autoSell ? '#ccc' : m.autoSell?'#0f0':'#ffcc70';
+      btnAutoSell.onclick=()=>{ if(shop.autoSell) m.autoSell=!m.autoSell; updateUI(); }
+      let btnAutoComb=document.createElement("button");
+      btnAutoComb.innerText="자동조합";
+      btnAutoComb.style.background = !shop.autoCombine ? '#ccc' : m.autoCombine?'#0f0':'#ffcc70';
+      btnAutoComb.onclick=()=>{ if(shop.autoCombine) m.autoCombine=!m.autoCombine; updateUI(); }
+      let btnDiv=document.createElement("span");
+      btnDiv.className="inv-buttons";
+      btnDiv.appendChild(btnAutoSell);
+      btnDiv.appendChild(btnAutoComb);
+      btnDiv.appendChild(btnSell);
+      d.appendChild(btnDiv);
+    }
+    inv.appendChild(d);
+  });
+  renderCombine(); renderShop();
+}
+
+// =====================
+// 합성
+// =====================
+function renderCombine(){
+  let el=document.getElementById("combineList");
+  el.innerHTML="";
+  inventory.forEach((m,i)=>{
+    if(!m.unlocked || i===inventory.length-1) return;
+    let d=document.createElement("div");
+    d.innerHTML=`${m.name} x2 → ${names[i+1]} `;
+    let btn=document.createElement("button");
+    btn.innerText="조합";
+    btn.onclick=()=>combine(i);
+    d.appendChild(btn);
+    el.appendChild(d);
+  });
+}
+function combine(i){
+  if(inventory[i].count<2) return;
+  inventory[i].count-=2;
+  inventory[i+1].count++;
+  inventory[i+1].unlocked=true;
+  updateUI();
+}
+
+// =====================
+// 판매
+// =====================
+function sell(i){ money+=inventory[i].count*inventory[i].price; inventory[i].count=0; updateUI(); }
+
+// =====================
+// 상점 렌더
+// =====================
+function renderShop(){
+  const s=document.getElementById("shop");
+  s.innerHTML="";
+  
+  function addItem(text, cost, onclick){
+    let div=document.createElement("div");
+    div.className="shop-item";
+    div.innerHTML=`<span>${text} (가격:${cost||'MAX'})</span>`;
+    let btn=document.createElement("button");
+    btn.innerText='[구매]';
+    btn.onclick=onclick;
+    div.appendChild(btn);
+    s.appendChild(div);
+  }
+
+  addItem(`곡괭이 Lv.${shop.pickaxe}`, pickaxeCost[shop.pickaxe], buyPick);
+  addItem(`생성속도 Lv.${shop.spawn}`, spawnCost[shop.spawn], buySpawn);
+  addItem(`희귀확률 Lv.${shop.rare}`, rareCost[shop.rare], buyRare);
+  addItem(`채굴봇 Lv.${shop.bot}`, botCost[shop.bot], buyBot);
+  addItem(`봇 강화 Lv.${shop.botSpeed}`, botUpgradeCost[shop.botSpeed], upgradeBot);
+  addItem(`자동판매 해금`, 100000, unlockAutoSell);
+  addItem(`자동조합 해금`, 300000, unlockAutoCombine);
+  addItem(`전체판매 해금`, 550000, unlockSellAll);
+  addItem(`전체조합 해금`, 550000, unlockCombineAll);
+}
+
+// =====================
+// 상점 구매 함수
+// =====================
+function buyPick(){ if(shop.pickaxe>=5) return; let cost=pickaxeCost[shop.pickaxe]; if(money>=cost){money-=cost;shop.pickaxe++;updateUI();}}
+function buySpawn(){ if(shop.spawn>=9) return; let cost=spawnCost[shop.spawn]; if(money>=cost){money-=cost;shop.spawn++;updateUI();}}
+function buyRare(){ if(shop.rare>=5) return; let cost=rareCost[shop.rare]; if(money>=cost){money-=cost;shop.rare++;updateUI();}}
+function buyBot(){ if(shop.bot>=5) return; let cost=botCost[shop.bot]; if(money>=cost){money-=cost;shop.bot++; spawnBot(); updateUI();}}
+function upgradeBot(){ if(shop.botSpeed>=5) return; let cost=botUpgradeCost[shop.botSpeed]; if(money>=cost){money-=cost;shop.botSpeed++;updateUI();}}
+
+// =====================
+// 해금
+// =====================
+function unlockAutoSell(){ if(money>=100000){money-=100000; shop.autoSell=true; updateUI();}}
+function unlockAutoCombine(){ if(money>=300000){money-=300000; shop.autoCombine=true; updateUI();}}
+function unlockSellAll(){ if(money>=550000){money-=550000; shop.unlockSellAll=true; let btn=document.getElementById("sellAll"); btn.disabled=false; btn.classList.remove("disabled"); }}
+function unlockCombineAll(){ if(money>=550000){money-=550000; shop.unlockCombineAll=true; let btn=document.getElementById("combineAll"); btn.disabled=false; btn.classList.remove("disabled");}}
+
+// =====================
+// 전체 판매/조합 버튼
+// =====================
+document.getElementById("sellAll").onclick=()=>{inventory.forEach((m,i)=>sell(i));}
+document.getElementById("combineAll").onclick=()=>{inventory.forEach((m,i)=>{while(m.count>=2) combine(i);});}
+
+// =====================
+// 채굴봇 AI
+// =====================
+let bots=[];
+function spawnBot(){ 
+  if(bots.length<shop.bot){ 
+    let b=document.createElement("div"); 
+    b.className="bot"; 
+    b.style.backgroundImage="url('bot.png')"; 
+    b.style.backgroundSize="contain";
+    b.style.backgroundRepeat="no-repeat";
+    document.getElementById("grid").appendChild(b); 
+    bots.push({el:b,x:0,y:0}); 
+  } 
+}
+setInterval(()=>{
+  bots.forEach(bot=>{
+    let minDist=Infinity, target=-1;
+    grid.forEach((c,i)=>{
+      if(c.hp>0){
+        let r=Math.floor(i/8)*60; let cPos=(i%8)*60;
+        let d=Math.hypot(bot.x-cPos,bot.y-r);
+        if(d<minDist){minDist=d; target=i;}
+      }
+    });
+    if(target>=0){
+      let r=Math.floor(target/8)*60; let cPos=(target%8)*60;
+      let speed=1+shop.botSpeed*0.5;
+      bot.x+=Math.sign(cPos-bot.x)*speed;
+      bot.y+=Math.sign(r-bot.y)*speed;
+      bot.el.style.left=bot.x+"px"; bot.el.style.top=bot.y+"px";
+      if(Math.abs(bot.x-cPos)<1 && Math.abs(bot.y-r)<1) mine(target);
+    }
+  });
+},50);
+
+// =====================
+// 초기화
+// =====================
+createGrid();
+updateUI();
+</script>
+</body>
+</html>
