@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ko">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JS 무한 점프킹</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #1a1a1a;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: white;
+            font-family: sans-serif;
+        }
+
+        canvas {
+            background: #2c3e50;
+            border: 4px solid #fff;
+        }
+
+        .info {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="info">
+        <div>높이: <span id="heightPos">0</span>m</div>
+        <div>최고 기록: <span id="maxHeight">0</span>m</div>
+    </div>
+
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const heightDisplay = document.getElementById('heightPos');
+        const maxDisplay = document.getElementById('maxHeight');
+
+        canvas.width = 400;
+        canvas.height = 600;
+
+        // --- 게임 설정 ---
+        const gravity = 0.45;
+        const friction = 0.7;
+        let isCharging = false;
+        let chargeLevel = 0;
+        const maxCharge = 17;
+        
+        let cameraY = 0; // 카메라의 수직 위치
+        let currentMaxHeight = 0;
+        let recordHeight = 0;
+
+        const player = {
+            x: 185,
+            y: 550,
+            width: 25,
+            height: 25,
+            vx: 0,
+            vy: 0,
+            onGround: false,
+            jumpDir: 1
+        };
+
+        // 초기 발판 세팅
+        let platforms = [
+            { x: 0, y: 580, w: 400, h: 50 } // 시작 바닥
+        ];
+
+        // --- 무한 발판 생성 로직 ---
+        let lastPlatformY = 580;
+        function generatePlatforms() {
+            // 카메라 위쪽으로 발판이 부족하면 추가 생성
+            while (lastPlatformY > cameraY - 100) {
+                const w = 60 + Math.random() * 60; // 60~120 너비
+                const x = Math.random() * (canvas.width - w);
+                const y = lastPlatformY - (80 + Math.random() * 100); // 80~180 간격
+                
+                platforms.push({ x, y, w, h: 15 });
+                lastPlatformY = y;
+            }
+            
+            // 화면 아래로 한참 벗어난 발판 제거 (성능 최적화)
+            if (platforms.length > 20) {
+                platforms = platforms.filter(p => p.y < cameraY + canvas.height + 200);
+            }
+        }
+
+        // --- 입력 ---
+        window.addEventListener('keydown', (e) => {
+            if (e.code === 'Space' && player.onGround) isCharging = true;
+            if (e.code === 'ArrowLeft') player.jumpDir = -1;
+            if (e.code === 'ArrowRight') player.jumpDir = 1;
+        });
+
+        window.addEventListener('keyup', (e) => {
+            if (e.code === 'Space' && isCharging) {
+                player.vy = -chargeLevel;
+                player.vx = player.jumpDir * (chargeLevel * 0.5);
+                player.onGround = false;
+                isCharging = false;
+                chargeLevel = 0;
+            }
+        });
+
+        function update() {
+            if (isCharging) chargeLevel = Math.min(chargeLevel + 0.4, maxCharge);
+
+            player.vy += gravity;
+            player.y += player.vy;
+            player.x += player.vx;
+
+            // 벽 튕기기
+            if (player.x < 0) { player.x = 0; player.vx *= -0.7; player.jumpDir = 1; }
+            if (player.x + player.width > canvas.width) { player.x = canvas.width - player.width; player.vx *= -0.7; player.jumpDir = -1; }
+
+            // 발판 충돌
+            player.onGround = false;
+            for (let p of platforms) {
+                if (player.vy > 0 && 
+                    player.x + player.width > p.x &&
+                    player.x < p.x + p.w &&
+                    player.y + player.height > p.y &&
+                    player.y + player.height < p.y + p.h + player.vy) {
+                    
+                    player.y = p.y - player.height;
+                    player.vy = 0;
+                    player.vx *= friction;
+                    player.onGround = true;
+                    break;
+                }
+            }
+
+            // --- 카메라 로직 ---
+            // 플레이어가 화면 중간(300px)보다 위로 올라가면 카메라가 따라감
+            let targetCameraY = player.y - 300;
+            if (targetCameraY < cameraY) {
+                cameraY += (targetCameraY - cameraY) * 0.1; // 부드러운 스크롤
+            }
+
+            // 높이 계산 (시작점 기준 위로 얼마나 갔는지)
+            let currentHeight = Math.floor((550 - player.y) / 10);
+            if (currentHeight < 0) currentHeight = 0;
+            heightDisplay.innerText = currentHeight;
+            if (currentHeight > recordHeight) {
+                recordHeight = currentHeight;
+                maxDisplay.innerText = recordHeight;
+            }
+
+            // 아래로 추락해서 화면 밖으로 완전히 사라지면 리셋 (점프킹의 매운맛)
+            if (player.y > cameraY + canvas.height) {
+                location.reload(); // 간단하게 게임 오버 시 재시작
+            }
+
+            generatePlatforms();
+            draw();
+            requestAnimationFrame(update);
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.save();
+            // 카메라 위치만큼 전체 좌표계를 이동시킴
+            ctx.translate(0, -cameraY);
+
+            // 발판
+            ctx.fillStyle = "#95a5a6";
+            platforms.forEach(p => {
+                ctx.fillRect(p.x, p.y, p.w, p.h);
+                ctx.strokeStyle = "#7f8c8d";
+                ctx.strokeRect(p.x, p.y, p.w, p.h);
+            });
+
+            // 플레이어
+            const r = Math.floor((chargeLevel / maxCharge) * 255);
+            ctx.fillStyle = `rgb(${r}, ${255-r}, 0)`;
+            ctx.fillRect(player.x, player.y, player.width, player.height);
+            
+            // 눈
+            ctx.fillStyle = "white";
+            ctx.fillRect(player.x + (player.jumpDir === 1 ? 18 : 3), player.y + 5, 5, 5);
+
+            // 게이지 바
+            if (isCharging) {
+                ctx.fillStyle = "red";
+                ctx.fillRect(player.x - 5, player.y - 15, (chargeLevel/maxCharge) * 35, 7);
+            }
+
+            ctx.restore();
+         }
+
+        update();
+    </script>
+</body>
+
+</html>  
